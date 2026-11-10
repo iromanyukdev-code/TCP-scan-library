@@ -274,7 +274,6 @@ func TestShutdownDrains(t *testing.T) {
 	<-started
 	done := make(chan error, 1)
 	go func() { done <- s.Shutdown(context.Background()) }()
-	// Observe the synchronized closing flag before releasing the in-flight dial.
 	deadline := time.Now().Add(time.Second)
 	for {
 		s.mu.Lock()

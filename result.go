@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-// State is the outcome of a TCP connect attempt.
 type State string
 
 const (
@@ -21,9 +20,6 @@ const (
 	Error       State = "error"
 )
 
-// Result describes one host/IP/port tuple. IP is invalid on DNS failure.
-// Duration measures the connect attempt (or DNS lookup on lookup failure),
-// excluding time spent waiting for a concurrency slot or a result reader.
 type Result struct {
 	Host     string
 	IP       netip.Addr

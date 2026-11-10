@@ -50,5 +50,5 @@ func validDNS(host string) bool {
 			}
 		}
 	}
-	return !allNumeric // Reject malformed numeric IP addresses rather than resolving them.
+	return !allNumeric
 }

@@ -1,4 +1,7 @@
-.PHONY: test vet fmt check
+.PHONY: run test vet fmt check
+
+run:
+	go run ./examples/graceful
 
 test:
 	go test -race ./...

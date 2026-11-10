@@ -1,0 +1,183 @@
+specification: go-library-api
+version: '1.0.0'
+package: portscan
+module: example.com/portscan
+go: '1.25.5'
+description: TCP Connect scanning library; this is a custom library contract, not OpenAPI.
+transport: in-process
+external_dependencies: []
+
+functions:
+  New:
+    signature: 'New(options ...Option) (*Scanner, error)'
+    description: Creates a scanner. Options are applied in order; the last value wins.
+    defaults:
+      concurrency: 100
+      connect_timeout: 1s
+    errors:
+      - Nil option.
+      - Nonpositive concurrency or timeout.
+  WithConcurrency:
+    signature: 'WithConcurrency(n int) Option'
+    validation: n > 0; validated by New.
+    scope: Shared by all scans on one Scanner; includes DNS lookups and TCP connections.
+  WithConnectTimeout:
+    signature: 'WithConnectTimeout(d time.Duration) Option'
+    validation: d > 0; validated by New.
+    scope: Separate timeout for each DNS lookup and each TCP connection.
+  List:
+    signature: 'List(ports ...int) Ports'
+    validation: Every port must be between 1 and 65535; errors are deferred until Scan.
+    duplicates: Removed, preserving first occurrence.
+  Range:
+    signature: 'Range(first, last int) Ports'
+    validation: 1 <= first <= last <= 65535; errors are deferred until Scan.
+    boundaries: inclusive
+  Union:
+    signature: 'Union(sets ...Ports) Ports'
+    description: Combines sets, removes duplicates, and preserves first occurrence.
+    errors: Propagates the first invalid set to Scan.
+
+methods:
+  Scanner.Scan:
+    signature: 'Scan(ctx context.Context, hosts []string, ports Ports) (<-chan Result, error)'
+    inputs:
+      ctx:
+        type: context.Context
+        required: true
+        description: Must be non-nil and not already canceled or expired.
+      hosts:
+        type: '[]string'
+        min_items: 1
+        accepted: [IPv4, IPv6, ASCII DNS hostname]
+        normalization:
+          - Canonicalize IP addresses; unmap IPv4-mapped IPv6.
+          - Lowercase DNS names and remove a trailing dot.
+          - Remove duplicate normalized hosts.
+        rejected:
+          - Empty hosts or surrounding whitespace.
+          - URLs, host-and-port pairs, bracketed IPv6, or CIDR.
+          - Malformed IP addresses or DNS names.
+          - All-numeric DNS names.
+        ipv6_zone_id: supported
+        international_names: Supply ASCII punycode.
+      ports:
+        type: Ports
+        required: true
+        description: Nonempty valid set constructed using List, Range, or Union.
+    returns:
+      success: A receive-only channel of Result and nil error.
+      failure: A nil channel and synchronous error; no scan starts.
+    synchronous_errors:
+      - Invalid context, hosts, or ports.
+      - Existing context error, compatible with errors.Is.
+      - ErrShutdown when the scanner is shutting down and inputs are valid.
+    dns:
+      lookups: Once per normalized DNS host per scan.
+      multiple_addresses: Check each unique IP and port combination.
+      distinct_hostnames: Remain distinct targets even if IP addresses overlap.
+      failure: One Result per port, invalid IP, and the lookup error in Err.
+      empty_answer: A net.DNSError with IsNotFound set.
+    stream:
+      ordering: unspecified
+      buffer_capacity: configured concurrency
+      normal_completion: One result per unique host/IP/port; one per host/port on DNS failure.
+      backpressure: A slow reader blocks result delivery and slows job production.
+      closure: After the producer and all workers have finished.
+      cancellation:
+        - Stops scheduling and cancels active network operations.
+        - Unstarted checks do not generate synthetic results.
+        - Results may be discarded to avoid blocking cleanup on the reader.
+        - Delivery of canceled results is not guaranteed.
+        - Cancel the scan context when abandoning the result stream.
+        - Check the caller context for cancellation after the stream closes.
+  Scanner.Shutdown:
+    signature: 'Shutdown(ctx context.Context) error'
+    inputs:
+      ctx:
+        type: context.Context
+        required: true
+        description: Non-nil context defining the grace period.
+    behavior:
+      - Permanently rejects new valid Scan requests with ErrShutdown.
+      - Allows accepted scans to complete while their results are consumed.
+      - Returns nil once all accepted scans finish and their channels close.
+      - On grace-context expiration or cancellation, cancels all scans and returns ctx.Err().
+      - A repeated call can wait for cleanup after forced cancellation.
+      - Concurrent calls are safe; expiration of any caller can force cancellation globally.
+    errors:
+      - Nil context.
+      - context.Canceled or context.DeadlineExceeded from the grace context.
+    restartable: false
+
+types:
+  Scanner:
+    construction: New
+    concurrent_use: safe
+    copyable: false
+    zero_value_usable: false
+    reusable: Until shutdown starts.
+  Option:
+    kind: functional option
+    constructors: [WithConcurrency, WithConnectTimeout]
+  Ports:
+    kind: opaque immutable port set
+    constructors: [List, Range, Union]
+    zero_value: Empty set; rejected by Scan.
+  Result:
+    fields:
+      Host:
+        type: string
+        description: Normalized target hostname or IP literal.
+      IP:
+        type: netip.Addr
+        description: Actual target IP; invalid on lookup failure.
+      Port:
+        type: uint16
+        minimum: 1
+        maximum: 65535
+      State:
+        type: State
+      Duration:
+        type: time.Duration
+        unit: nanoseconds
+        description: Connect-attempt duration, or DNS duration on lookup failure; excludes queue and reader wait.
+      Err:
+        type: error
+        nullable: true
+        description: Nil on success; supports errors.Is and errors.As for wrapped failures.
+  State:
+    underlying_type: string
+    values:
+      open:
+        constant: Open
+        meaning: TCP connection established; the connection is immediately closed.
+      closed:
+        constant: Closed
+        meaning: ECONNREFUSED.
+      timeout:
+        constant: Timeout
+        meaning: Operation deadline exceeded or net.Error.Timeout returns true.
+      unreachable:
+        constant: Unreachable
+        meaning: ENETUNREACH, EHOSTUNREACH, ENETDOWN, or EHOSTDOWN.
+      canceled:
+        constant: Canceled
+        meaning: Operation canceled; active connect cancellation includes scan-context expiration.
+      error:
+        constant: Error
+        meaning: Other failures, including DNS not found.
+    classification: Uses errors.Is and errors.As, never error text matching.
+errors:
+  ErrShutdown:
+    kind: sentinel
+    match: errors.Is(err, portscan.ErrShutdown)
+    message: 'portscan: scanner is shutting down'
+application:
+  run: go run ./examples/graceful
+  make_alias: make run
+  example_hosts: [127.0.0.1]
+  example_ports: [22, 80, 443, 8000-8010]
+  signals: [SIGINT, SIGTERM]
+  grace_period: 5s
+  signal_handling: Owned by the example application, not by the library.

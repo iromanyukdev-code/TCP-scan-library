@@ -1,5 +1,3 @@
-// Package portscan implements bounded, cancellable TCP Connect scanning.
-// A Scanner must be constructed with New and must not be copied.
 package portscan
 
 import (
@@ -13,17 +11,14 @@ import (
 	"time"
 )
 
-// ErrShutdown is returned when Scan is called after Shutdown begins.
 var ErrShutdown = errors.New("portscan: scanner is shutting down")
 
-// Option configures a Scanner.
 type Option func(*config) error
 type config struct {
 	concurrency int
 	timeout     time.Duration
 }
 
-// WithConcurrency limits in-flight network operations across all scans on a Scanner.
 func WithConcurrency(n int) Option {
 	return func(c *config) error {
 		if n < 1 {
@@ -34,7 +29,6 @@ func WithConcurrency(n int) Option {
 	}
 }
 
-// WithConnectTimeout sets the timeout for each connection and DNS lookup.
 func WithConnectTimeout(d time.Duration) Option {
 	return func(c *config) error {
 		if d <= 0 {
@@ -45,7 +39,6 @@ func WithConnectTimeout(d time.Duration) Option {
 	}
 }
 
-// Scanner is safe for concurrent use. Its zero value is not usable.
 type Scanner struct {
 	cfg      config
 	slots    chan struct{}
@@ -59,7 +52,6 @@ type Scanner struct {
 	done     chan struct{}
 }
 
-// New constructs a Scanner with defaults of 100 operations and a one-second timeout.
 func New(options ...Option) (*Scanner, error) {
 	cfg := config{concurrency: 100, timeout: time.Second}
 	for _, option := range options {
@@ -78,10 +70,6 @@ func New(options ...Option) (*Scanner, error) {
 		lifetime: ctx, cancel: cancel, done: make(chan struct{})}, nil
 }
 
-// Scan validates input synchronously and streams results in completion order.
-// It expands each DNS name into all unique IPs. DNS failures produce one result
-// per port. Cancel ctx if you stop reading: cancellation may discard results,
-// including unstarted checks, and always allows the channel to close.
 func (s *Scanner) Scan(ctx context.Context, hosts []string, ports Ports) (<-chan Result, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("nil context")
@@ -144,7 +132,6 @@ func (s *Scanner) run(ctx context.Context, hosts []string, ports []uint16, resul
 			}
 		}()
 	}
-	// Produce lazily: never materialize the host/IP/port Cartesian product.
 	func() {
 		for _, host := range hosts {
 			if ctx.Err() != nil {
@@ -235,7 +222,7 @@ func (s *Scanner) connect(ctx context.Context, j job) Result {
 	conn, err := s.dial(dialCtx, "tcp", net.JoinHostPort(j.ip.String(), strconv.Itoa(int(j.port))))
 	if conn != nil {
 		_ = conn.Close()
-	} // The handshake alone determines port availability.
+	}
 	if ctx.Err() != nil {
 		err = context.Canceled
 	}
@@ -251,11 +238,6 @@ func emit(ctx context.Context, out chan<- Result, result Result) bool {
 	}
 }
 
-// Shutdown permanently rejects new scans and waits for existing scans to finish.
-// Callers must keep consuming results. If ctx expires, all scans are canceled
-// and Shutdown returns ctx.Err(); call Shutdown again to await full cleanup.
-// Concurrent and repeated Shutdown calls are safe. Any expiring caller forces
-// cancellation for the entire Scanner.
 func (s *Scanner) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("nil context")

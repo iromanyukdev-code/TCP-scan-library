@@ -1,4 +1,3 @@
-// Command graceful demonstrates application-owned signal handling.
 package main
 
 import (
@@ -27,7 +26,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// A signal starts the grace period; it must not cancel the scan immediately.
 	scanCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	results, err := scanner.Scan(scanCtx, []string{"127.0.0.1"}, portscan.Union(portscan.List(22, 80, 443), portscan.Range(8000, 8010)))
@@ -50,7 +48,6 @@ func run() error {
 	defer shutdownCancel()
 	err = scanner.Shutdown(shutdownCtx)
 	if err != nil {
-		// Shutdown has requested cancellation. Wait for workers and channel cleanup.
 		if cleanupErr := scanner.Shutdown(context.Background()); cleanupErr != nil {
 			return cleanupErr
 		}
